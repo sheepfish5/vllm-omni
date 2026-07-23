@@ -1268,8 +1268,6 @@ class Qwen2_5OmniThinkerForConditionalGeneration(
                 is_video,
                 is_audio,
                 is_multimodal,
-                num_video,
-                num_audio,
             )
 
         # Default: standard merge (no interleaving), same as parent class
