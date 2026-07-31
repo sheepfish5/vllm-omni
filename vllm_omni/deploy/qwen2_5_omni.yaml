@@ -19,9 +19,9 @@ async_chunk: false
 
 stages:
   - stage_id: 0
-    max_num_batched_tokens: 32768
+    max_num_batched_tokens: 4096
     max_num_seqs: 1
-    gpu_memory_utilization: 0.8
+    gpu_memory_utilization: 0.6
     enforce_eager: true
     trust_remote_code: true
     enable_prefix_caching: false
@@ -36,9 +36,9 @@ stages:
       repetition_penalty: 1.1
 
   - stage_id: 1
-    max_num_batched_tokens: 32768
+    max_num_batched_tokens: 8192
     max_num_seqs: 1
-    gpu_memory_utilization: 0.8
+    gpu_memory_utilization: 0.9
     enforce_eager: true
     trust_remote_code: true
     enable_prefix_caching: false
@@ -52,9 +52,9 @@ stages:
       repetition_penalty: 1.05
 
   - stage_id: 2
-    max_num_batched_tokens: 32768
+    max_num_batched_tokens: 4096
     max_num_seqs: 1
-    gpu_memory_utilization: 0.15
+    gpu_memory_utilization: 0.3
     enforce_eager: true
     trust_remote_code: true
     enable_prefix_caching: false
