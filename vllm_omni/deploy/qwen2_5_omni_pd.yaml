@@ -1,0 +1,83 @@
+# Qwen2.5-Omni-3B thinker-only prefill/decode deployment.
+#
+# Conservative correctness-first layout for one host with 3 x 24-GiB 4090D:
+#   stage 0: thinker prefill-only, GPU 0, Mooncake KV producer
+#   stage 1: thinker decode-only,  GPU 1, Mooncake KV consumer
+#   GPU 2 is intentionally left unused until the 1P1D path is verified.
+#
+# The two stages load independent thinker copies. Keep their TP size and KV
+# connector settings symmetric; only kv_role, kv_rank, port, and device differ.
+
+pipeline: qwen2_5_omni_pd
+async_chunk: false
+
+trust_remote_code: true
+distributed_executor_backend: mp
+enable_prefix_caching: false
+
+stages:
+  # Stage 0: prompt/multimodal prefill and KV export.
+  - stage_id: 0
+    devices: "0"
+    env:
+      VLLM_HOST_IP: "127.0.0.1"
+      VLLM_MOONCAKE_BOOTSTRAP_PORT: "25201"
+    tensor_parallel_size: 1
+    max_num_seqs: 1
+    max_num_batched_tokens: 4096
+    max_model_len: 4096
+    gpu_memory_utilization: 0.90
+    enforce_eager: true
+    async_scheduling: true
+    mm_processor_cache_gb: 0
+    skip_mm_profiling: true
+    enable_flashinfer_autotune: false
+    engine_extras:
+      kv_transfer_config:
+        kv_connector: MooncakeConnector
+        kv_role: kv_producer
+        kv_rank: 0
+        kv_parallel_size: 2
+        kv_ip: "127.0.0.1"
+        kv_connector_extra_config:
+          mooncake_bootstrap_port: 25201
+    default_sampling_params:
+      temperature: 0.0
+      top_p: 1.0
+      top_k: -1
+      max_tokens: 256
+      seed: 42
+      repetition_penalty: 1.1
+
+  # Stage 1: import stage-0 KV and generate the final text.
+  - stage_id: 1
+    devices: "1"
+    env:
+      VLLM_HOST_IP: "127.0.0.1"
+      VLLM_MOONCAKE_BOOTSTRAP_PORT: "25202"
+    tensor_parallel_size: 1
+    max_num_seqs: 1
+    max_num_batched_tokens: 4096
+    max_model_len: 4096
+    gpu_memory_utilization: 0.90
+    enforce_eager: true
+    async_scheduling: true
+    mm_processor_cache_gb: 0
+    skip_mm_profiling: true
+    enable_flashinfer_autotune: false
+    engine_extras:
+      kv_transfer_config:
+        kv_connector: MooncakeConnector
+        kv_role: kv_consumer
+        kv_rank: 1
+        kv_parallel_size: 2
+        kv_ip: "127.0.0.1"
+        kv_connector_extra_config:
+          mooncake_bootstrap_port: 25202
+    default_sampling_params:
+      temperature: 0.0
+      top_p: 1.0
+      top_k: -1
+      max_tokens: 256
+      seed: 42
+      repetition_penalty: 1.1

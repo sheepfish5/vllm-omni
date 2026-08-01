@@ -61,6 +61,46 @@ QWEN2_5_OMNI_PIPELINE = PipelineConfig(
 )
 
 
+QWEN2_5_OMNI_PD_PIPELINE = PipelineConfig(
+    model_type="qwen2_5_omni_pd",
+    default_deploy_config_name="qwen2_5_omni_pd.yaml",
+    model_arch="Qwen2_5OmniForConditionalGeneration",
+    stages=(
+        StagePipelineConfig(
+            stage_id=0,
+            model_stage="thinker",
+            execution_type=StageExecutionType.LLM_AR,
+            input_sources=(),
+            # The prefill worker only materializes and exports prompt KV. The
+            # PD runtime forces max_tokens=1 and suppresses this stage's text.
+            final_output=False,
+            owns_tokenizer=True,
+            requires_multimodal_data=True,
+            engine_output_type="latent",
+            sampling_constraints={"detokenize": True},
+            # PD flags are legacy top-level stage fields. ``extras`` carries
+            # them through StageConfig.to_omegaconf without treating them as
+            # vLLM engine arguments.
+            extras={"is_prefill_only": True},
+        ),
+        StagePipelineConfig(
+            stage_id=1,
+            model_stage="thinker",
+            execution_type=StageExecutionType.LLM_AR,
+            input_sources=(0,),
+            final_output=True,
+            final_output_type="text",
+            owns_tokenizer=True,
+            # The decode worker receives tokenized input and the stage-0
+            # multimodal/KV state, so it must not run the encoders again.
+            requires_multimodal_data=False,
+            engine_output_type="latent",
+            sampling_constraints={"detokenize": True},
+            extras={"is_decode_only": True},
+        ),
+    ),
+)
+
 # Single-stage thinker-only variant for the abort test.
 QWEN2_5_OMNI_THINKER_ONLY_PIPELINE = PipelineConfig(
     model_type="qwen2_5_omni_thinker_only",
