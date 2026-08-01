@@ -1655,10 +1655,12 @@ class Orchestrator:
 
         # Get KV params captured from the prefill output (must include remote_request_id).
         kv_prefill_params = self._pd_kv_params.pop(req_id, None)
-        if not kv_prefill_params or "remote_request_id" not in kv_prefill_params:
-            raise RuntimeError(
-                f"[Orchestrator][PD] Missing prefill kv_transfer_params.remote_request_id for req={req_id}"
-            )
+        # TODO: NIXLConnector needs remote_request_id. 这里需要根据使用的 connector 的类型来检查是否包括 remote_request_id
+        # MooncakeConnector doesn't return remote_request_id, so comment this checking code
+        # if not kv_prefill_params or "remote_request_id" not in kv_prefill_params:
+        #     raise RuntimeError(
+        #         f"[Orchestrator][PD] Missing prefill kv_transfer_params.remote_request_id for req={req_id}"
+        #     )
 
         decode_kv_params: dict[str, Any] = {
             "transfer_id": f"xfer-{req_id}",
@@ -1671,7 +1673,8 @@ class Orchestrator:
             decode_kv_params["remote_engine_id"] = self._pd_prefill_engine_id
 
         # Overlay params from prefill side (includes remote_request_id set by monkey patch).
-        decode_kv_params.update(kv_prefill_params)
+        if kv_prefill_params:
+            decode_kv_params.update(kv_prefill_params)
 
         # Ensure these flags are set correctly after any overlay.
         decode_kv_params["do_remote_prefill"] = True

@@ -885,7 +885,22 @@ class AsyncOmniEngine:
             ea = getattr(prefill_cfg, "engine_args", None)
             kv_cfg = getattr(ea, "kv_transfer_config", None) if ea is not None else None
             if kv_cfg is not None:
-                port = vllm_envs.VLLM_MOONCAKE_BOOTSTRAP_PORT
+                extra_cfg = getattr(
+                    kv_cfg,
+                    "kv_connector_extra_config",
+                    None,
+                ) or {}
+
+                port = extra_cfg.get("mooncake_bootstrap_port")
+                if port is None:
+                    port = vllm_envs.VLLM_MOONCAKE_BOOTSTRAP_PORT
+
+                try:
+                    port = int(port)
+                except Exception:
+                    raise ValueError(f"Invalid kv_connector_extra_config.mooncake_bootstrap_port: {port}")
+                if not 1 <= port <= 65535:
+                    raise ValueError(f"Invalid kv_connector_extra_config.mooncake_bootstrap_port: {port}")
                 kv_ip = getattr(kv_cfg, "kv_ip", None) or "127.0.0.1"
                 bootstrap_addr = f"http://{kv_ip}:{port}"
         except Exception as exc:

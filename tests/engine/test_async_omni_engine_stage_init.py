@@ -597,6 +597,74 @@ def test_initialize_local_llm_replica_passes_stage_init_timeout_to_complete_stag
     assert captured_timeout == 302
 
 
+def test_initialize_local_llm_replica_applies_stage_env_during_spawn(monkeypatch):
+    import vllm_omni.engine.stage_runtime as runtime_mod
+
+    runtime = StageRuntime(
+        stage_configs=[],
+        model="dummy-model",
+        config_path="dummy-config",
+        stage_init_timeout=60,
+        diffusion_batch_size=1,
+        async_chunk=False,
+    )
+
+    env_key = "VLLM_OMNI_TEST_STAGE_ENV"
+    previous_value = os.environ.get(env_key)
+    os.environ[env_key] = "parent-value"
+    observed_value: str | None = None
+
+    plan = ReplicaInitPlan(
+        replica_id=0,
+        num_replicas=1,
+        launch_mode="local",
+        stage_cfg=types.SimpleNamespace(engine_args={}, runtime=types.SimpleNamespace(devices=None)),
+        metadata=types.SimpleNamespace(
+            stage_id=0,
+            runtime_cfg={"env": {env_key: "stage-value"}},
+        ),
+        stage_connector_spec={},
+        omni_kv_connector=(None, None, None),
+        stage_vllm_config=types.SimpleNamespace(),
+        executor_class=object,
+        engine_args_dict={},
+    )
+
+    monkeypatch.setattr(runtime_mod, "acquire_device_locks", lambda *_: [])
+
+    from vllm_omni.engine.stage_engine_startup import StageReplicaResources
+
+    @contextlib.contextmanager
+    def _fake_launch_stage_replica(**_kwargs):
+        nonlocal observed_value
+        observed_value = os.environ.get(env_key)
+        yield StageReplicaResources(
+            manager=types.SimpleNamespace(shutdown=lambda: None),
+            addresses=types.SimpleNamespace(
+                inputs=["in"],
+                outputs=["out"],
+                frontend_stats_publish_address=None,
+            ),
+        )
+
+    monkeypatch.setattr(runtime_mod, "launch_stage_replica", _fake_launch_stage_replica)
+    monkeypatch.setattr(
+        runtime_mod.StageEngineCoreClientBase,
+        "make_async_mp_client",
+        staticmethod(lambda **_: types.SimpleNamespace(shutdown=lambda: None)),
+    )
+
+    try:
+        runtime._initialize_local_llm_replica(plan, 60)
+        assert observed_value == "stage-value"
+        assert os.environ[env_key] == "parent-value"
+    finally:
+        if previous_value is None:
+            os.environ.pop(env_key, None)
+        else:
+            os.environ[env_key] = previous_value
+
+
 def test_build_engine_args_cli_tokenizer_overrides_inferred_base_tokenizer(tmp_path):
     from vllm_omni.engine.stage_init_utils import build_engine_args_dict
 
