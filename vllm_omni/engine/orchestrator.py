@@ -112,6 +112,7 @@ def build_engine_core_request_from_tokens(
     params: SamplingParams | PoolingParams,
     arrival_time: float | None = None,
     model_config: ModelConfig | None = None,
+    tokenizer: Any | None = None,
     resumable: bool = False,
     mm_features: list | None = None,
 ) -> OmniEngineCoreRequest:
@@ -127,6 +128,19 @@ def build_engine_core_request_from_tokens(
         sampling_params = params.clone()
         if sampling_params.max_tokens is None and model_config is not None:
             sampling_params.max_tokens = model_config.max_model_len - len(prompt_token_ids)
+        # This helper bypasses vLLM InputProcessor.process_inputs(), which
+        # normally resolves the primary EOS token and generation-config stop
+        # tokens. Without this step, PD decode ignores models such as Qwen
+        # generating <|im_end|> and continues until max_tokens.
+        if model_config is not None:
+            generation_config = model_config.try_get_generation_config()
+            eos_token_id = getattr(tokenizer, "eos_token_id", None)
+            sampling_params.update_from_generation_config(
+                generation_config,
+                eos_token_id,
+            )
+            if tokenizer is not None:
+                sampling_params.update_from_tokenizer(tokenizer)
     else:
         pooling_params = params.clone()
 
@@ -1935,6 +1949,7 @@ class Orchestrator:
                     prompt=decode_input,
                     params=params,
                     model_config=next_pool.stage_vllm_config.model_config,
+                    tokenizer=getattr(next_pool.output_processor, "tokenizer", None),
                     mm_features=req_state.mm_features,
                     resumable=next_stage_resumable,
                 )

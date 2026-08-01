@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 from vllm.lora.request import LoRARequest
 from vllm.sampling_params import SamplingParams
@@ -42,3 +44,44 @@ class TestBuildEngineCoreRequestLoRA:
             model_config=None,
         )
         assert request.lora_request is None
+
+
+class TestBuildEngineCoreRequestSamplingParams:
+    def test_resolves_eos_like_vllm_input_processor(self):
+        params = SamplingParams(max_tokens=10)
+        model_config = SimpleNamespace(
+            max_model_len=128,
+            try_get_generation_config=lambda: {},
+        )
+        tokenizer = SimpleNamespace(eos_token_id=151645)
+
+        request = build_engine_core_request_from_tokens(
+            request_id="req-eos",
+            prompt={"prompt_token_ids": [1, 2, 3]},
+            params=params,
+            model_config=model_config,
+            tokenizer=tokenizer,
+        )
+
+        assert request.sampling_params is not None
+        assert request.sampling_params.eos_token_id == 151645
+        # The request-local clone is updated; deploy defaults remain reusable.
+        assert params.eos_token_id is None
+
+    def test_ignore_eos_remains_effective(self):
+        params = SamplingParams(max_tokens=10, ignore_eos=True)
+        model_config = SimpleNamespace(
+            max_model_len=128,
+            try_get_generation_config=lambda: {},
+        )
+
+        request = build_engine_core_request_from_tokens(
+            request_id="req-ignore-eos",
+            prompt={"prompt_token_ids": [1, 2, 3]},
+            params=params,
+            model_config=model_config,
+            tokenizer=SimpleNamespace(eos_token_id=151645),
+        )
+
+        assert request.sampling_params is not None
+        assert request.sampling_params.eos_token_id is None
