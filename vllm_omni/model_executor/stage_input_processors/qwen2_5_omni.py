@@ -1,4 +1,5 @@
 import logging
+from collections.abc import Mapping
 
 import torch
 from vllm.inputs import TextPrompt
@@ -127,6 +128,48 @@ def talker2code2wav_full_payload(
     }
 
 
+def thinker_prefill_full_payload(
+    transfer_manager,
+    pooling_output,
+    request,
+):
+    """Ship prompt hidden states from the PD prefill thinker to decode.
+
+    Mooncake transfers attention K/V only. Qwen2.5-Omni's Talker also needs
+    the Thinker hidden states for the original prompt, so those rows travel
+    over the regular stage connector and are stored in the decode worker's
+    ``model_intermediate_buffer``.
+    """
+    del transfer_manager
+    rid = getattr(request, "request_id", "?")
+    hidden = pooling_output.get("hidden") if isinstance(pooling_output, Mapping) else None
+    if not isinstance(hidden, torch.Tensor):
+        logger.warning(
+            "qwen2_5_omni.thinker_prefill_full_payload: missing hidden tensor for req=%s",
+            rid,
+        )
+        return None
+
+    prompt_token_ids = getattr(request, "prompt_token_ids", None)
+    if hasattr(prompt_token_ids, "_x"):
+        prompt_token_ids = prompt_token_ids._x
+    prompt_len = len(prompt_token_ids or [])
+    prompt_hidden = hidden.detach().cpu().to(torch.float32)
+    if prompt_len <= 0 or prompt_hidden.shape[0] < prompt_len:
+        logger.warning(
+            "qwen2_5_omni.thinker_prefill_full_payload: hidden rows=%d, prompt_len=%d "
+            "for req=%s; refusing incomplete payload.",
+            int(prompt_hidden.shape[0]),
+            prompt_len,
+            rid,
+        )
+        return None
+
+    return {
+        "pd_prefill_multimodal_output": {"hidden": prompt_hidden[:prompt_len]},
+    }
+
+
 # ============================================================================
 # Worker-connector data plane (non-async-chunk path) -- thinker->talker.
 #
@@ -242,6 +285,25 @@ def thinker2talker_full_payload(
         )
         return None
 
+    # In PD mode the decode engine reuses the prompt KV cache and therefore
+    # only executes rows for newly generated tokens. The prompt hidden states
+    # are emitted by the paired prefill engine and carried on the decode
+    # request through model_intermediate_buffer. Keep them separate here and
+    # prepend them after finish-reason accounting below.
+    prefill_hidden = None
+    for model_buffer in (
+        getattr(request, "model_intermediate_buffer", None),
+        getattr(request, "additional_information_cpu", None),
+    ):
+        if not isinstance(model_buffer, Mapping):
+            continue
+        prefill_mm = model_buffer.get("pd_prefill_multimodal_output")
+        if isinstance(prefill_mm, Mapping):
+            candidate = prefill_mm.get("hidden")
+            if isinstance(candidate, torch.Tensor):
+                prefill_hidden = candidate
+                break
+
     def _ensure_list(x):
         if x is None:
             return []
@@ -301,6 +363,26 @@ def thinker2talker_full_payload(
     if stop_emission_drop > 0 and len(output_token_ids) >= stop_emission_drop:
         output_token_ids = output_token_ids[:-stop_emission_drop]
     h = hidden.detach().cpu().to(torch.float32)
+    prompt_len = len(prompt_token_ids)
+    if isinstance(prefill_hidden, torch.Tensor):
+        prompt_hidden = prefill_hidden.detach().cpu().to(torch.float32)
+        if prompt_hidden.shape[0] >= prompt_len:
+            prompt_hidden = prompt_hidden[:prompt_len]
+            # Some KV connectors may recompute one or more trailing prompt
+            # positions on the decode worker. Remove only that prompt/decode
+            # overlap; the terminal stop row is trimmed separately below.
+            raw_total = int(prompt_hidden.shape[0] + h.shape[0])
+            overlap = max(0, raw_total - len(all_token_ids))
+            overlap = min(overlap, int(h.shape[0]))
+            h = torch.cat((prompt_hidden, h[overlap:]), dim=0)
+        else:
+            logger.warning(
+                "qwen2_5_omni.thinker2talker_full_payload: PD prefill hidden "
+                "rows=%d < prompt_len=%d for req=%s; cannot merge complete payload.",
+                int(prompt_hidden.shape[0]),
+                prompt_len,
+                getattr(request, "request_id", "?"),
+            )
     target_rows = max(0, len(all_token_ids) - stop_emission_drop)
     if target_rows <= 0:
         logger.warning(
@@ -322,7 +404,6 @@ def thinker2talker_full_payload(
         )
         h = h[:target_rows]
 
-    prompt_len = len(prompt_token_ids)
     if h.shape[0] < prompt_len:
         # Under-captured prefill -- defensively skip rather than ship a
         # truncated payload that would confuse the talker's prefill path.

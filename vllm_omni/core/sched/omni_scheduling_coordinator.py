@@ -38,6 +38,10 @@ _FULL_PAYLOAD_INPUT_STAGES: frozenset[tuple[str, str]] = frozenset(
         # producer builder (text_hidden_states routed via
         # pooler_output["hidden"] -> accumulator -> connector).  Both
         # stages of qwen2_5_omni are enabled.
+        # In PD mode stage 1 is another thinker: it receives prompt hidden
+        # states from the prefill thinker while Mooncake independently
+        # transfers the prompt KV cache.
+        ("Qwen2_5OmniForConditionalGeneration", "thinker"),
         ("Qwen2_5OmniForConditionalGeneration", "talker"),
         ("Qwen2_5OmniForConditionalGeneration", "code2wav"),
         # covo_audio: fused_thinker_talker (Stage 0) -> code2wav (Stage 1).

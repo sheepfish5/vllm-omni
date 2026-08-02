@@ -1,10 +1,17 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
-"""Qwen2.5-Omni pipeline topology (frozen).
+"""Qwen2.5-Omni pipeline topologies (frozen).
 
-Stage 0: Thinker  — multimodal understanding + text generation
-Stage 1: Talker   — text embeddings → speech tokens
-Stage 2: Code2Wav — speech tokens → audio waveform
+Standard pipeline:
+  Stage 0: Thinker  — multimodal understanding + text generation
+  Stage 1: Talker   — text embeddings → speech tokens
+  Stage 2: Code2Wav — speech tokens → audio waveform
+
+PD pipeline:
+  Stage 0: Thinker Prefill — prompt KV producer
+  Stage 1: Thinker Decode  — remote-KV consumer + text generation
+  Stage 2: Talker          — text embeddings → speech tokens
+  Stage 3: Code2Wav        — speech tokens → audio waveform
 """
 
 from vllm_omni.config.stage_config import (
@@ -78,6 +85,7 @@ QWEN2_5_OMNI_PD_PIPELINE = PipelineConfig(
             requires_multimodal_data=True,
             engine_output_type="latent",
             sampling_constraints={"detokenize": True},
+            custom_process_next_stage_input_func=f"{_PROC}.thinker_prefill_full_payload",
             # PD flags are legacy top-level stage fields. ``extras`` carries
             # them through StageConfig.to_omegaconf without treating them as
             # vLLM engine arguments.
@@ -96,7 +104,32 @@ QWEN2_5_OMNI_PD_PIPELINE = PipelineConfig(
             requires_multimodal_data=False,
             engine_output_type="latent",
             sampling_constraints={"detokenize": True},
+            custom_process_next_stage_input_func=f"{_PROC}.thinker2talker_full_payload",
             extras={"is_decode_only": True},
+        ),
+        StagePipelineConfig(
+            stage_id=2,
+            model_stage="talker",
+            execution_type=StageExecutionType.LLM_AR,
+            input_sources=(1,),
+            engine_output_type="latent",
+            sync_process_input_func=f"{_PROC}.thinker2talker_token_only",
+            custom_process_next_stage_input_func=f"{_PROC}.talker2code2wav_full_payload",
+            sampling_constraints={
+                "detokenize": True,
+                "stop_token_ids": [8294],
+            },
+        ),
+        StagePipelineConfig(
+            stage_id=3,
+            model_stage="code2wav",
+            execution_type=StageExecutionType.LLM_GENERATION,
+            input_sources=(2,),
+            final_output=True,
+            final_output_type="audio",
+            engine_output_type="audio",
+            sync_process_input_func=f"{_PROC}.talker2code2wav_token_only",
+            sampling_constraints={"detokenize": True},
         ),
     ),
 )

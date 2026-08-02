@@ -114,6 +114,7 @@ class TestFullPayloadCoordinatorSelection(unittest.TestCase):
         {
             ("Qwen3OmniMoeForConditionalGeneration", "talker"),
             ("Qwen3OmniMoeForConditionalGeneration", "code2wav"),
+            ("Qwen2_5OmniForConditionalGeneration", "thinker"),
             ("Qwen2_5OmniForConditionalGeneration", "talker"),
             ("Qwen2_5OmniForConditionalGeneration", "code2wav"),
             ("CovoAudioForConditionalGeneration", "code2wav"),

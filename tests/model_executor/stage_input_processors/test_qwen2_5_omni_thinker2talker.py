@@ -17,6 +17,7 @@ import pytest
 import torch
 
 from vllm_omni.model_executor.stage_input_processors.qwen2_5_omni import (
+    thinker_prefill_full_payload,
     thinker2talker_full_payload,
 )
 
@@ -27,6 +28,7 @@ def _make_request(
     prompt_token_ids,
     output_token_ids,
     status_name: str | None = "FINISHED_STOPPED",
+    model_intermediate_buffer=None,
 ):
     status = SimpleNamespace(name=status_name) if status_name else None
     return SimpleNamespace(
@@ -36,6 +38,7 @@ def _make_request(
         all_token_ids=list(prompt_token_ids) + list(output_token_ids),
         status=status,
         sampling_params=None,
+        model_intermediate_buffer=model_intermediate_buffer,
     )
 
 
@@ -83,6 +86,53 @@ def test_missing_hidden_returns_none():
     """Defensive: pooling_output without "hidden" returns None."""
     request = _make_request([1, 2], [3], status_name="FINISHED_STOPPED")
     assert thinker2talker_full_payload(transfer_manager=None, pooling_output={}, request=request) is None
+
+
+def test_pd_prefill_full_payload_packs_prompt_hidden():
+    prompt = [1, 2, 3]
+    request = _make_request(prompt, [], status_name="FINISHED_LENGTH_CAPPED")
+    hidden = torch.arange(4 * 4, dtype=torch.float32).reshape(4, 4)
+
+    payload = thinker_prefill_full_payload(
+        transfer_manager=None,
+        pooling_output={"hidden": hidden},
+        request=request,
+    )
+
+    assert payload is not None
+    assert torch.equal(
+        payload["pd_prefill_multimodal_output"]["hidden"],
+        hidden[: len(prompt)],
+    )
+
+
+def test_pd_prefill_hidden_is_prepended_to_decode_hidden():
+    """PD decode only captures generated rows; prepend prompt rows saved by
+    the prefill engine before applying the normal stop-row trim.
+    """
+    prompt = [1, 2, 3]
+    output = [10, 11, 12]
+    prefill_hidden = torch.arange(3 * 4, dtype=torch.float32).reshape(3, 4)
+    decode_hidden = torch.arange(3 * 4, 6 * 4, dtype=torch.float32).reshape(3, 4)
+    request = _make_request(
+        prompt,
+        output,
+        status_name="FINISHED_STOPPED",
+        model_intermediate_buffer={
+            "pd_prefill_multimodal_output": {"hidden": prefill_hidden},
+        },
+    )
+
+    payload = thinker2talker_full_payload(
+        transfer_manager=None,
+        pooling_output={"hidden": decode_hidden},
+        request=request,
+    )
+
+    assert payload is not None
+    assert torch.equal(payload["embed"]["prefill"], prefill_hidden)
+    assert torch.equal(payload["hidden_states"]["output"], decode_hidden[:-1])
+    assert payload["ids"]["output"] == output[:-1]
 
 
 if __name__ == "__main__":

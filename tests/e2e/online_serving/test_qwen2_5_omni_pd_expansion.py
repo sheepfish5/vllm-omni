@@ -115,3 +115,26 @@ def test_text_to_text_001(omni_server, openai_client) -> None:
     }
 
     openai_client.send_omni_request(request_config, request_num=get_max_batch_size())
+
+@pytest.mark.slow
+@pytest.mark.omni
+@pytest.mark.parametrize("omni_server", test_params, indirect=True)
+def test_text_to_text_audio_001(omni_server, openai_client) -> None:
+    """
+    Test text input processing and text/audio output generation via OpenAI API.
+    Deploy Setting: default yaml
+    Input Modal: text
+    Output Modal: text + audio
+    Datasets: single request
+    """
+    messages = dummy_messages_from_mix_data(system_prompt=get_system_prompt(), content_text=get_prompt())
+
+    request_config = {
+        "model": omni_server.model,
+        "messages": messages,
+        "stream": False,
+        "modalities": ["text", "audio"],
+        "key_words": {"text": ["beijing"], "audio": ["beijing"]},
+    }
+
+    openai_client.send_omni_request(request_config)

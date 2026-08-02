@@ -1,12 +1,15 @@
-# Qwen2.5-Omni-3B thinker-only prefill/decode deployment.
+# Qwen2.5-Omni-3B full text-and-speech PD deployment.
 #
-# Conservative correctness-first layout for one host with 3 x 24-GiB 4090D:
+# Layout for one host with 3 x 24-GiB 4090 GPUs:
 #   stage 0: thinker prefill-only, GPU 0, Mooncake KV producer
 #   stage 1: thinker decode-only,  GPU 1, Mooncake KV consumer
-#   GPU 2 is intentionally left unused until the 1P1D path is verified.
+#   stage 2: talker,              GPU 2
+#   stage 3: code2wav,            GPU 2
 #
 # The two stages load independent thinker copies. Keep their TP size and KV
 # connector settings symmetric; only kv_role, kv_rank, port, and device differ.
+# Talker and code2wav share GPU 2 with a combined memory-utilization budget of
+# 0.90 (0.60 + 0.30).
 
 pipeline: qwen2_5_omni_pd
 async_chunk: false
@@ -79,5 +82,43 @@ stages:
       top_p: 1.0
       top_k: -1
       max_tokens: 256
+      seed: 42
+      repetition_penalty: 1.1
+
+  # Stage 2: turn thinker text/hidden states into speech codec tokens.
+  - stage_id: 2
+    devices: "2"
+    tensor_parallel_size: 1
+    max_num_seqs: 1
+    max_num_batched_tokens: 8192
+    gpu_memory_utilization: 0.60
+    enforce_eager: true
+    trust_remote_code: true
+    enable_prefix_caching: false
+    default_sampling_params:
+      temperature: 0.9
+      top_p: 0.8
+      top_k: 40
+      max_tokens: 2048
+      seed: 42
+      repetition_penalty: 1.05
+
+  # Stage 3: decode speech codec tokens into the final waveform.
+  - stage_id: 3
+    devices: "2"
+    tensor_parallel_size: 1
+    max_num_seqs: 1
+    max_num_batched_tokens: 4096
+    gpu_memory_utilization: 0.30
+    enforce_eager: true
+    trust_remote_code: true
+    enable_prefix_caching: false
+    enable_flashinfer_autotune: false
+    async_scheduling: false
+    default_sampling_params:
+      temperature: 0.0
+      top_p: 1.0
+      top_k: -1
+      max_tokens: 2048
       seed: 42
       repetition_penalty: 1.1
