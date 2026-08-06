@@ -871,40 +871,41 @@ class AsyncOmniEngine:
 
     def _detect_pd_config(self) -> dict[str, Any] | None:
         """Detect PD (Prefill-Decode) disaggregation config from stage_configs.
-        Returns a dict with 'pd_pair' and 'bootstrap_addr', or None.
+        Returns connector-specific routing metadata, or None.
         """
         pd_pair = PDDisaggregationMixin.detect_pd_separation_from_stage_configs(self.stage_configs)
         if pd_pair is None:
             return None
         prefill_idx, decode_idx = pd_pair
 
-        # Extract bootstrap address from prefill stage engine_args
+        prefill_cfg = self.stage_configs[prefill_idx]
+        engine_args = getattr(prefill_cfg, "engine_args", None)
+        kv_cfg = getattr(engine_args, "kv_transfer_config", None) if engine_args is not None else None
+        if kv_cfg is None:
+            raise ValueError(f"PD prefill stage-{prefill_idx} has no kv_transfer_config")
+
+        connector_name = getattr(kv_cfg, "kv_connector", None)
+        if not connector_name:
+            raise ValueError(f"PD prefill stage-{prefill_idx} has no kv_connector")
+        connector_name = str(connector_name)
+
+        # Mooncake discovers the producer through its bootstrap endpoint.
+        # Other connectors, such as NIXL, return request-scoped routing
+        # metadata when prefill finishes and do not use this address.
         bootstrap_addr: str | None = None
-        try:
-            prefill_cfg = self.stage_configs[prefill_idx]
-            ea = getattr(prefill_cfg, "engine_args", None)
-            kv_cfg = getattr(ea, "kv_transfer_config", None) if ea is not None else None
-            if kv_cfg is not None:
-                extra_cfg = getattr(
-                    kv_cfg,
-                    "kv_connector_extra_config",
-                    None,
-                ) or {}
-
-                port = extra_cfg.get("mooncake_bootstrap_port")
-                if port is None:
-                    port = vllm_envs.VLLM_MOONCAKE_BOOTSTRAP_PORT
-
-                try:
-                    port = int(port)
-                except Exception:
-                    raise ValueError(f"Invalid kv_connector_extra_config.mooncake_bootstrap_port: {port}")
-                if not 1 <= port <= 65535:
-                    raise ValueError(f"Invalid kv_connector_extra_config.mooncake_bootstrap_port: {port}")
-                kv_ip = getattr(kv_cfg, "kv_ip", None) or "127.0.0.1"
-                bootstrap_addr = f"http://{kv_ip}:{port}"
-        except Exception as exc:
-            logger.warning("[AsyncOmniEngine] Could not extract PD bootstrap address: %s", exc)
+        if "mooncake" in connector_name.casefold():
+            extra_cfg = getattr(kv_cfg, "kv_connector_extra_config", None) or {}
+            port = extra_cfg.get("mooncake_bootstrap_port")
+            if port is None:
+                port = vllm_envs.VLLM_MOONCAKE_BOOTSTRAP_PORT
+            try:
+                port = int(port)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"Invalid kv_connector_extra_config.mooncake_bootstrap_port: {port}") from exc
+            if not 1 <= port <= 65535:
+                raise ValueError(f"Invalid kv_connector_extra_config.mooncake_bootstrap_port: {port}")
+            kv_ip = getattr(kv_cfg, "kv_ip", None) or "127.0.0.1"
+            bootstrap_addr = f"http://{kv_ip}:{port}"
 
         logger.info(
             "[AsyncOmniEngine] PD disaggregation detected: prefill=stage-%d, decode=stage-%d, bootstrap=%s",
@@ -922,6 +923,7 @@ class AsyncOmniEngine:
 
         return {
             "pd_pair": (prefill_idx, decode_idx),
+            "connector_name": connector_name,
             "bootstrap_addr": bootstrap_addr,
             "prefill_engine_id": prefill_engine_id,
         }

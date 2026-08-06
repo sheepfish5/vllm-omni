@@ -14,7 +14,7 @@ from tests.helpers.stage_config import get_deploy_config_path, modify_stage_conf
 os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
 
 
-models = ["/root/autodl-tmp/models/Qwen2.5-Omni-3B"]
+models = ["Qwen/Qwen2.5-Omni-7B"]
 
 # Single CI deploy YAML; rocm/xpu deltas are picked automatically via the
 # platforms: section in vllm_omni/deploy/ci/qwen2_5_omni.yaml.

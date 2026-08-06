@@ -45,6 +45,80 @@ def test_orchestrator_startup_timeout_warns_how_to_raise_limits(monkeypatch):
     assert "--stage-init-timeout" in message
 
 
+@pytest.mark.parametrize(
+    ("connector_name", "expected_bootstrap_addr"),
+    [
+        ("MooncakeConnector", "http://10.0.0.8:25301"),
+        ("NixlConnector", None),
+    ],
+)
+def test_detect_pd_config_returns_connector_specific_metadata(connector_name, expected_bootstrap_addr):
+    engine = object.__new__(AsyncOmniEngine)
+    kv_cfg = types.SimpleNamespace(
+        kv_connector=connector_name,
+        kv_connector_extra_config={"mooncake_bootstrap_port": 25301},
+        kv_ip="10.0.0.8",
+    )
+    engine.stage_configs = [
+        types.SimpleNamespace(
+            stage_id=0,
+            is_prefill_only=True,
+            is_decode_only=False,
+            engine_input_source=[],
+            engine_args=types.SimpleNamespace(kv_transfer_config=kv_cfg),
+        ),
+        types.SimpleNamespace(
+            stage_id=1,
+            is_prefill_only=False,
+            is_decode_only=True,
+            engine_input_source=[0],
+            engine_args=types.SimpleNamespace(),
+        ),
+    ]
+    engine.stage_clients = [
+        types.SimpleNamespace(
+            vllm_config=types.SimpleNamespace(
+                kv_transfer_config=types.SimpleNamespace(engine_id="prefill-engine"),
+            )
+        )
+    ]
+
+    config = engine._detect_pd_config()
+
+    assert config == {
+        "pd_pair": (0, 1),
+        "connector_name": connector_name,
+        "bootstrap_addr": expected_bootstrap_addr,
+        "prefill_engine_id": "prefill-engine",
+    }
+
+
+def test_detect_pd_config_rejects_invalid_mooncake_bootstrap_port():
+    engine = object.__new__(AsyncOmniEngine)
+    kv_cfg = types.SimpleNamespace(
+        kv_connector="MooncakeConnector",
+        kv_connector_extra_config={"mooncake_bootstrap_port": "invalid"},
+        kv_ip="127.0.0.1",
+    )
+    engine.stage_configs = [
+        types.SimpleNamespace(
+            stage_id=0,
+            is_prefill_only=True,
+            engine_input_source=[],
+            engine_args=types.SimpleNamespace(kv_transfer_config=kv_cfg),
+        ),
+        types.SimpleNamespace(
+            stage_id=1,
+            is_decode_only=True,
+            engine_input_source=[0],
+            engine_args=types.SimpleNamespace(),
+        ),
+    ]
+
+    with pytest.raises(ValueError, match="mooncake_bootstrap_port"):
+        engine._detect_pd_config()
+
+
 def _make_llm_metadata(
     stage_id: int,
     *,

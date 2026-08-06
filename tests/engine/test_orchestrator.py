@@ -257,6 +257,79 @@ def _sampling_params(max_tokens: int = 4) -> SamplingParams:
     return SamplingParams(max_tokens=max_tokens)
 
 
+def _pd_orchestrator(
+    connector_name: str,
+    *,
+    kv_prefill_params: dict[str, Any] | None = None,
+    bootstrap_addr: str | None = None,
+    prefill_engine_id: str | None = None,
+) -> Orchestrator:
+    orchestrator = object.__new__(Orchestrator)
+    orchestrator._pd_connector_name = connector_name
+    orchestrator._pd_bootstrap_addr = bootstrap_addr
+    orchestrator._pd_prefill_engine_id = prefill_engine_id
+    orchestrator._pd_kv_params = {}
+    if kv_prefill_params is not None:
+        orchestrator._pd_kv_params["req-1"] = kv_prefill_params
+    return orchestrator
+
+
+def test_build_pd_decode_params_accepts_missing_mooncake_prefill_metadata():
+    orchestrator = _pd_orchestrator(
+        "MooncakeConnector",
+        bootstrap_addr="http://127.0.0.1:25201",
+        prefill_engine_id="prefill-engine",
+    )
+
+    result = orchestrator._build_pd_decode_params("req-1", _sampling_params())
+
+    assert result.extra_args["kv_transfer_params"] == {
+        "transfer_id": "xfer-req-1",
+        "remote_bootstrap_addr": "http://127.0.0.1:25201",
+        "remote_engine_id": "prefill-engine",
+        "do_remote_prefill": True,
+        "do_remote_decode": False,
+    }
+
+
+def test_build_pd_decode_params_rejects_incomplete_mooncake_static_metadata():
+    orchestrator = _pd_orchestrator(
+        "MooncakeConnector",
+        bootstrap_addr="http://127.0.0.1:25201",
+    )
+
+    with pytest.raises(RuntimeError, match="remote_engine_id"):
+        orchestrator._build_pd_decode_params("req-1", _sampling_params())
+
+
+def test_build_pd_decode_params_accepts_nixl_prefill_metadata():
+    orchestrator = _pd_orchestrator(
+        "NixlConnector",
+        kv_prefill_params={
+            "remote_block_ids": (),
+            "remote_engine_id": "prefill-engine",
+            "remote_request_id": "prefill-request",
+            "remote_host": "127.0.0.1",
+            "remote_port": 14579,
+        },
+    )
+
+    result = orchestrator._build_pd_decode_params("req-1", _sampling_params())
+    kv_params = result.extra_args["kv_transfer_params"]
+
+    assert kv_params["remote_block_ids"] == ()
+    assert kv_params["remote_request_id"] == "prefill-request"
+    assert kv_params["do_remote_prefill"] is True
+    assert kv_params["do_remote_decode"] is False
+
+
+def test_build_pd_decode_params_rejects_missing_nixl_prefill_metadata():
+    orchestrator = _pd_orchestrator("NixlConnector")
+
+    with pytest.raises(RuntimeError, match="remote_request_id"):
+        orchestrator._build_pd_decode_params("req-1", _sampling_params())
+
+
 def _engine_core_outputs(tag: str, timestamp: float) -> SimpleNamespace:
     return SimpleNamespace(outputs=[tag], timestamp=timestamp, scheduler_stats=None)
 

@@ -350,6 +350,7 @@ class Orchestrator:
     _transfer_emitter: Any = None
     _stat_logger: OmniPrometheusStatLogger | None = None
     duplex_control_plane: DuplexControlPlanePort | None = None
+    _pd_connector_name: str | None = None
 
     def __init__(
         self,
@@ -386,11 +387,13 @@ class Orchestrator:
 
         # PD disaggregation state
         self._pd_pair: tuple[int, int] | None = None
+        self._pd_connector_name = None
         self._pd_bootstrap_addr: str | None = None
         self._pd_prefill_engine_id: str | None = None
         self._pd_kv_params: dict[str, Any] = {}
         if pd_config is not None:
             self._pd_pair = pd_config.get("pd_pair")
+            self._pd_connector_name = pd_config.get("connector_name")
             self._pd_bootstrap_addr = pd_config.get("bootstrap_addr")
             self._pd_prefill_engine_id = pd_config.get("prefill_engine_id")
         self.request_states: dict[str, OrchestratorRequestState] = {}
@@ -1667,14 +1670,10 @@ class Orchestrator:
         if sp.extra_args is None:
             sp.extra_args = {}
 
-        # Get KV params captured from the prefill output (must include remote_request_id).
+        # NIXL returns request-scoped routing metadata when prefill finishes.
+        # Mooncake returns None and instead uses the static engine/bootstrap
+        # information discovered during engine initialization.
         kv_prefill_params = self._pd_kv_params.pop(req_id, None)
-        # TODO: NIXLConnector needs remote_request_id. 这里需要根据使用的 connector 的类型来检查是否包括 remote_request_id
-        # MooncakeConnector doesn't return remote_request_id, so comment this checking code
-        # if not kv_prefill_params or "remote_request_id" not in kv_prefill_params:
-        #     raise RuntimeError(
-        #         f"[Orchestrator][PD] Missing prefill kv_transfer_params.remote_request_id for req={req_id}"
-        #     )
 
         decode_kv_params: dict[str, Any] = {
             "transfer_id": f"xfer-{req_id}",
@@ -1686,7 +1685,7 @@ class Orchestrator:
         if self._pd_prefill_engine_id:
             decode_kv_params["remote_engine_id"] = self._pd_prefill_engine_id
 
-        # Overlay params from prefill side (includes remote_request_id set by monkey patch).
+        # Overlay any request-scoped params returned by the prefill connector.
         if kv_prefill_params:
             decode_kv_params.update(kv_prefill_params)
 
@@ -1695,6 +1694,33 @@ class Orchestrator:
         decode_kv_params["do_remote_decode"] = False
         if not decode_kv_params.get("transfer_id"):
             decode_kv_params["transfer_id"] = f"xfer-{req_id}"
+
+        connector_name = (self._pd_connector_name or "").casefold()
+        if "mooncake" in connector_name:
+            required_keys = (
+                "transfer_id",
+                "remote_engine_id",
+                "remote_bootstrap_addr",
+            )
+        elif "nixl" in connector_name:
+            required_keys = (
+                "remote_block_ids",
+                "remote_engine_id",
+                "remote_request_id",
+                "remote_host",
+                "remote_port",
+            )
+        else:
+            raise RuntimeError(
+                f"[Orchestrator][PD] Unsupported KV connector {self._pd_connector_name!r} for req={req_id}"
+            )
+
+        missing_keys = [key for key in required_keys if key not in decode_kv_params or decode_kv_params[key] is None]
+        if missing_keys:
+            raise RuntimeError(
+                f"[Orchestrator][PD] Missing {self._pd_connector_name} decode KV parameters "
+                f"for req={req_id}: {missing_keys}"
+            )
 
         sp.extra_args["kv_transfer_params"] = decode_kv_params
 

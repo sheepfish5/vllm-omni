@@ -14,7 +14,7 @@ from tests.helpers.stage_config import get_deploy_config_path, modify_stage_conf
 os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
 
 
-models = ["/root/autodl-tmp/models/Qwen2.5-Omni-3B"]
+models = ["Qwen/Qwen2.5-Omni-7B"]
 
 # Single CI deploy YAML; rocm/xpu deltas are picked automatically via the
 # platforms: section in vllm_omni/deploy/ci/qwen2_5_omni.yaml.
@@ -57,7 +57,7 @@ def get_max_batch_size(size_type="few"):
 
 @pytest.mark.slow
 @pytest.mark.omni
-# @hardware_test(res={"cuda": "L4", "rocm": "MI325"}, num_cards=2)
+@hardware_test(res={"cuda": "L4", "rocm": "MI325"}, num_cards=3)
 @pytest.mark.parametrize("omni_server", test_params, indirect=True)
 def test_mix_to_text_audio_001(omni_server, openai_client) -> None:
     """
@@ -84,9 +84,9 @@ def test_mix_to_text_audio_001(omni_server, openai_client) -> None:
         "model": omni_server.model,
         "messages": messages,
         "stream": True,
-        # "key_words": {
-        #     "video": ["sphere", "globe", "circle", "round", "ball"],
-        # },
+        "key_words": {
+            "video": ["sphere", "globe", "circle", "round", "ball"],
+        },
     }
 
     # Test single completion
